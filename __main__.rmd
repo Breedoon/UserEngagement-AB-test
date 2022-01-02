@@ -1,0 +1,120 @@
+```{r}
+library(Matching)
+library(MatchIt)
+library(WeightIt)
+library(cobalt)
+library(knitr)
+library(janitor)
+library(tidyverse)
+library(gridExtra)
+library(foreign)
+library(rbounds)
+library(ggplot2)
+library(fastDummies)
+```
+```{r}
+t.res <- t.test(y_tmt, y_ctl)
+t.res
+```
+
+
+```{r}
+```
+
+```{r}
+t.res <- t.test(y_tmt, y_ctl, alternative='greater')
+t.res
+```
+
+```{r}
+t.res.pair <- t.test(y_tmt_paired, y_ctl_paired)
+t.res.pair
+```
+
+
+```{r}
+data <- read.csv('data/combined_data.csv')
+```
+```{r}
+treat <- data$variant_number
+y <- data$diff
+x <- data[, which(colnames(data) %in% c('gender', 'pre', 'user_type', 'signup_date_int'))]
+x$gender <- as.factor(x$gender)
+x$user_type <- as.factor(x$user_type)
+x <- dummy_cols(x)
+x <- x[, -which(colnames(x) %in% c('gender', 'user_type'))]
+
+```
+
+```{r}
+t.test(y[as.logical(treat)], y[!as.logical(treat)])
+```
+
+```{r}
+# gout <- GenMatch(treat, x, estimand = 'ATE', pop.size=5000)
+# mout.gen <- Match(Y = y, Tr = treat, X = x, Weight.matrix = gout, estimand = 'ATE', version = 'fast')
+mout.gen <- Match(Y = y, Tr = treat, X = x, estimand = 'ATE', replace=FALSE, version = 'fast', caliper=c(0.25, 0.25, 1, 1, 1, 1, 1, 1, 1), exact=c(FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE))
+mbout.gen <- MatchBalance(treat ~ ., data=x, match.out = mout.gen, print.level = 1)
+
+# gout <- GenMatch(treat, x, estimand = 'ATE')
+# mout.gen <- Match(Y = y, Tr = treat, X = x, Weight.matrix = gout, estimand = 'ATE')
+# mbout.gen <- MatchBalance(treat ~ x, match.out = mout.gen)
+
+```
+
+```{r}
+t.test(y[mout.gen$index.treated], y[mout.gen$index.control], paired = TRUE)
+```
+
+```{r}
+mean(y[mout.gen$index.treated]) / mean(y[mout.gen$index.control])
+```
+```{r}
+
+```
+
+```{r}
+write.csv(rbind(data[mout.gen$index.control,], data[mout.gen$index.treated,]), file= 'data/combined_data_matched.csv', row.names = FALSE)
+```
+
+
+```{r}
+mbout.default <- MatchBalance(treat ~ ., data=x)
+
+get_balance_histogram <- function(df, x_col, index.treatment, index.control, ks.p.value) {
+  ggplot(df, aes_string(x = x_col)) +
+    geom_density(data = df[index.control,], fill = "blue", alpha = 0.2, aes(color = "Control")) +
+    geom_density(data = df[index.treatment,], fill = "red", alpha = 0.2, aes(color = "Treatment")) +
+    geom_vline(xintercept = mean(df[index.control, x_col]), linetype = "dashed", color = "blue") +
+    geom_vline(xintercept = mean(df[index.treatment, x_col]), linetype = "dashed", color = "red") +
+    scale_x_continuous(trans='log10') +
+    ggtitle(paste(x_col, "\n KS p-value: ", round(ks.p.value, 5))) +
+    theme(plot.title = element_text(hjust = 0.5))
+}
+
+show_balance_histograms <- function(index.treatment, index.control, mbout.Matching) {
+  g1 <- get_balance_histogram(data, 'gender', index.treatment, index.control, mbout.Matching[[1]]$ks$ks$p.value)
+  g2 <- get_balance_histogram(data, 'user_type', index.treatment, index.control, mbout.Matching[[2]]$ks$ks$p.value)
+
+  grid.arrange(g1, g2, nrow = 2)
+}
+
+show_balance_histograms(which(treat == 1), which(treat == 0), mbout.default$BeforeMatching)
+
+mbout.default
+
+get_balance_histogram(data, 'pre', which(treat == 1), which(treat == 0), 0)
+
+```
+
+```{r}
+analyze_sensitivity <- function(mout, Gamma = 2, GammaInc = 0.1) {
+  pout <- psens(mout, Gamma = Gamma, GammaInc = GammaInc)
+  plot(c(pout$bounds$Gamma, pout$bounds$Gamma), c(pout$bounds$`Lower bound`, pout$bounds$`Upper bound`),
+       log = "y", type = 'b', xlab = "Gamma, \n Odds of Assignment To Treatment Due to Unobserved Factors", ylab = 'P-value ', main = 'Sensitivity of results to hidden bias')
+  abline(h = 0.05, col = "red", lwd = 3, lty = 2)
+  grid(NULL, NULL, lty = 6)
+  pout
+}
+analyze_sensitivity(mout.gen, 1)
+```
